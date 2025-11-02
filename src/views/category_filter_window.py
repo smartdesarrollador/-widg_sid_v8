@@ -59,8 +59,8 @@ class CategoryFilterWindow(QWidget):
 
         self._init_ui()
 
-        # Cargar filtros guardados al iniciar
-        self.load_filters()
+        # NO cargar filtros guardados al iniciar - empezar sin filtros por defecto
+        # self.load_filters()
 
     def _init_ui(self):
         """Inicializar interfaz de usuario"""
@@ -83,14 +83,19 @@ class CategoryFilterWindow(QWidget):
         scroll_layout.setSpacing(12)
 
         # === SECCIONES DE FILTROS ===
+        # Búsqueda primero (arriba)
+        self._create_search_section(scroll_layout)
+
+        # Ordenamiento justo después de búsqueda
+        self._create_ordering_section(scroll_layout)
+
+        # Luego los demás filtros
         self._create_status_section(scroll_layout)
         self._create_type_section(scroll_layout)
         self._create_pinned_section(scroll_layout)
         self._create_popularity_section(scroll_layout)
-        self._create_search_section(scroll_layout)
 
-        # Filtros Avanzados
-        self._create_ordering_section(scroll_layout)
+        # Filtros Avanzados restantes
         self._create_visual_attributes_section(scroll_layout)
         self._create_dates_section(scroll_layout)
 
