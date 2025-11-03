@@ -1844,6 +1844,189 @@ class DBManager:
         except Exception as e:
             logger.error(f"Error al reorganizar speed dials: {e}")
 
+    # ==================== Browser Sessions Management ====================
+
+    def save_session(self, name: str, tabs_data: list, is_auto_save: bool = False) -> Optional[int]:
+        """
+        Guarda una sesión del navegador con todas sus pestañas.
+
+        Args:
+            name: Nombre de la sesión
+            tabs_data: Lista de diccionarios con datos de pestañas [{url, title, position, is_active}]
+            is_auto_save: Si es una sesión de auto-guardado (True) o guardada manualmente (False)
+
+        Returns:
+            int: ID de la sesión creada o None si falla
+        """
+        try:
+            # Si es auto-save, eliminar sesiones auto-save anteriores
+            if is_auto_save:
+                delete_query = "DELETE FROM browser_sessions WHERE is_auto_save = 1"
+                self.execute_update(delete_query)
+
+            # Crear sesión
+            insert_query = """
+                INSERT INTO browser_sessions (name, is_auto_save)
+                VALUES (?, ?)
+            """
+            self.execute_update(insert_query, (name, 1 if is_auto_save else 0))
+
+            # Obtener ID de la sesión creada
+            session_id_query = "SELECT last_insert_rowid() as id"
+            result = self.execute_query(session_id_query)
+            if not result:
+                logger.error("No se pudo obtener el ID de la sesión")
+                return None
+
+            session_id = result[0]['id']
+
+            # Guardar pestañas
+            for tab in tabs_data:
+                tab_query = """
+                    INSERT INTO session_tabs (session_id, url, title, position, is_active)
+                    VALUES (?, ?, ?, ?, ?)
+                """
+                self.execute_update(tab_query, (
+                    session_id,
+                    tab.get('url', ''),
+                    tab.get('title', 'Nueva pestaña'),
+                    tab.get('position', 0),
+                    1 if tab.get('is_active', False) else 0
+                ))
+
+            logger.info(f"Sesión guardada: {name} (ID: {session_id}) con {len(tabs_data)} pestañas")
+            return session_id
+
+        except Exception as e:
+            logger.error(f"Error al guardar sesión: {e}")
+            return None
+
+    def get_sessions(self, include_auto_save: bool = False) -> List[Dict]:
+        """
+        Obtiene todas las sesiones guardadas.
+
+        Args:
+            include_auto_save: Si incluir sesiones de auto-guardado
+
+        Returns:
+            Lista de diccionarios con información de sesiones
+        """
+        try:
+            if include_auto_save:
+                query = """
+                    SELECT id, name, is_auto_save, created_at, updated_at,
+                           (SELECT COUNT(*) FROM session_tabs WHERE session_id = browser_sessions.id) as tab_count
+                    FROM browser_sessions
+                    ORDER BY created_at DESC
+                """
+            else:
+                query = """
+                    SELECT id, name, is_auto_save, created_at, updated_at,
+                           (SELECT COUNT(*) FROM session_tabs WHERE session_id = browser_sessions.id) as tab_count
+                    FROM browser_sessions
+                    WHERE is_auto_save = 0
+                    ORDER BY created_at DESC
+                """
+
+            result = self.execute_query(query)
+            return result if result else []
+
+        except Exception as e:
+            logger.error(f"Error al obtener sesiones: {e}")
+            return []
+
+    def get_session_tabs(self, session_id: int) -> List[Dict]:
+        """
+        Obtiene todas las pestañas de una sesión.
+
+        Args:
+            session_id: ID de la sesión
+
+        Returns:
+            Lista de diccionarios con información de pestañas
+        """
+        try:
+            query = """
+                SELECT id, url, title, position, is_active
+                FROM session_tabs
+                WHERE session_id = ?
+                ORDER BY position ASC
+            """
+            result = self.execute_query(query, (session_id,))
+            return result if result else []
+
+        except Exception as e:
+            logger.error(f"Error al obtener pestañas de sesión: {e}")
+            return []
+
+    def get_last_auto_save_session(self) -> Optional[Dict]:
+        """
+        Obtiene la última sesión guardada automáticamente.
+
+        Returns:
+            Diccionario con información de la sesión o None
+        """
+        try:
+            query = """
+                SELECT id, name, is_auto_save, created_at, updated_at
+                FROM browser_sessions
+                WHERE is_auto_save = 1
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            result = self.execute_query(query)
+            return result[0] if result else None
+
+        except Exception as e:
+            logger.error(f"Error al obtener última sesión auto-guardada: {e}")
+            return None
+
+    def delete_session(self, session_id: int) -> bool:
+        """
+        Elimina una sesión y todas sus pestañas.
+
+        Args:
+            session_id: ID de la sesión
+
+        Returns:
+            True si se eliminó correctamente, False en caso contrario
+        """
+        try:
+            # Las pestañas se eliminan automáticamente por la cláusula ON DELETE CASCADE
+            delete_query = "DELETE FROM browser_sessions WHERE id = ?"
+            self.execute_update(delete_query, (session_id,))
+            logger.info(f"Sesión eliminada: {session_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error al eliminar sesión: {e}")
+            return False
+
+    def rename_session(self, session_id: int, new_name: str) -> bool:
+        """
+        Renombra una sesión.
+
+        Args:
+            session_id: ID de la sesión
+            new_name: Nuevo nombre de la sesión
+
+        Returns:
+            True si se renombró correctamente, False en caso contrario
+        """
+        try:
+            update_query = """
+                UPDATE browser_sessions
+                SET name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """
+            self.execute_update(update_query, (new_name, session_id))
+            logger.info(f"Sesión {session_id} renombrada a: {new_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error al renombrar sesión: {e}")
+            return False
+
     # ==================== Context Manager ====================
 
     def __enter__(self):

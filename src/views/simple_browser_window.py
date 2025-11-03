@@ -62,7 +62,7 @@ class SimpleBrowserWindow(QWidget):
 
         Args:
             url: URL inicial a cargar
-            db_manager: Instancia de DBManager para manejar marcadores
+            db_manager: Instancia de DBManager para manejar marcadores y sesiones
         """
         super().__init__()
         self.url = url
@@ -81,6 +81,13 @@ class SimpleBrowserWindow(QWidget):
         self.tab_widget = None  # QTabWidget
         self.is_loading = False  # Estado de carga
 
+        # Gestor de sesiones
+        self.session_manager = None
+        if self.db:
+            from src.core.browser_session_manager import BrowserSessionManager
+            self.session_manager = BrowserSessionManager(self.db)
+            logger.info("BrowserSessionManager inicializado")
+
         logger.info(f"Inicializando SimpleBrowserWindow con URL: {url}")
 
         self._setup_window()
@@ -91,8 +98,13 @@ class SimpleBrowserWindow(QWidget):
         # Habilitar rastreo de mouse para detectar hover en el borde
         self.setMouseTracking(True)
 
-        # Cargar URL inicial de forma asíncrona (evita bloqueo del hilo principal)
-        QTimer.singleShot(100, lambda: self.load_url(self.url))
+        # Restaurar última sesión si existe
+        if self.session_manager:
+            QTimer.singleShot(200, self._restore_last_session)
+
+        # Cargar URL inicial de forma asíncrona si no se restaura sesión
+        if not self.session_manager:
+            QTimer.singleShot(100, lambda: self.load_url(self.url))
 
     def _setup_window(self):
         """Configura propiedades de la ventana."""
@@ -206,6 +218,27 @@ class SimpleBrowserWindow(QWidget):
         self.bookmarks_list_btn.setToolTip("Ver marcadores")
         self.bookmarks_list_btn.clicked.connect(self.show_bookmarks_panel)
         nav_layout.addWidget(self.bookmarks_list_btn)
+
+        # Separador
+        separator = QLabel("|")
+        separator.setStyleSheet("color: #00d4ff;")
+        separator.setFixedWidth(15)
+        separator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nav_layout.addWidget(separator)
+
+        # Botón guardar sesión
+        self.save_session_btn = QPushButton("💾")
+        self.save_session_btn.setFixedWidth(40)
+        self.save_session_btn.setToolTip("Guardar sesión actual")
+        self.save_session_btn.clicked.connect(self.save_current_session)
+        nav_layout.addWidget(self.save_session_btn)
+
+        # Botón gestionar sesiones
+        self.manage_sessions_btn = QPushButton("🗂️")
+        self.manage_sessions_btn.setFixedWidth(40)
+        self.manage_sessions_btn.setToolTip("Gestionar sesiones")
+        self.manage_sessions_btn.clicked.connect(self.show_session_manager)
+        nav_layout.addWidget(self.manage_sessions_btn)
 
         # Botón cerrar
         self.close_btn = QPushButton("✕")
@@ -880,11 +913,176 @@ class SimpleBrowserWindow(QWidget):
         except Exception as e:
             logger.error(f"Error al desregistrar navegador como AppBar: {e}")
 
+    # ==================== Session Management ====================
+
+    def _get_current_tabs_data(self) -> list:
+        """
+        Obtiene los datos de todas las pestañas actuales.
+
+        Returns:
+            Lista de diccionarios con datos de pestañas
+        """
+        tabs_data = []
+
+        for i, browser in enumerate(self.tabs):
+            url = browser.url().toString()
+            title = browser.title() or "Nueva pestaña"
+            is_active = (i == self.tab_widget.currentIndex())
+
+            tabs_data.append({
+                'url': url,
+                'title': title,
+                'position': i,
+                'is_active': is_active
+            })
+
+        return tabs_data
+
+    def save_current_session(self):
+        """Guarda la sesión actual con un nombre personalizado."""
+        if not self.session_manager:
+            logger.warning("Session manager no disponible")
+            return
+
+        if len(self.tabs) == 0:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self,
+                "Sin pestañas",
+                "No hay pestañas para guardar en la sesión"
+            )
+            return
+
+        try:
+            from src.views.save_session_dialog import SaveSessionDialog
+
+            dialog = SaveSessionDialog(self)
+            if dialog.exec():
+                session_name = dialog.get_session_name()
+                tabs_data = self._get_current_tabs_data()
+
+                session_id = self.session_manager.save_current_session(
+                    tabs_data,
+                    name=session_name,
+                    is_auto_save=False
+                )
+
+                if session_id:
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.information(
+                        self,
+                        "Sesión Guardada",
+                        f"Sesión '{session_name}' guardada con {len(tabs_data)} pestaña(s)"
+                    )
+                    logger.info(f"Sesión guardada manualmente: {session_name}")
+                else:
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(
+                        self,
+                        "Error",
+                        "No se pudo guardar la sesión"
+                    )
+
+        except Exception as e:
+            logger.error(f"Error al guardar sesión: {e}")
+
+    def show_session_manager(self):
+        """Muestra el dialog de gestión de sesiones."""
+        if not self.session_manager:
+            logger.warning("Session manager no disponible")
+            return
+
+        try:
+            from src.views.session_dialog import SessionDialog
+
+            dialog = SessionDialog(self.session_manager, self)
+            dialog.session_restored.connect(self._restore_session_tabs)
+            dialog.exec()
+
+        except Exception as e:
+            logger.error(f"Error al mostrar gestor de sesiones: {e}")
+
+    def _restore_session_tabs(self, tabs_data: list):
+        """
+        Restaura las pestañas de una sesión.
+
+        Args:
+            tabs_data: Lista de diccionarios con datos de pestañas
+        """
+        try:
+            # Contar cuántas pestañas viejas hay
+            old_tabs_count = len(self.tabs)
+
+            # Restaurar cada pestaña de la sesión
+            active_index = 0
+            for i, tab in enumerate(tabs_data):
+                url = tab.get('url', '')
+                title = tab.get('title', 'Nueva pestaña')
+                is_active = tab.get('is_active', False)
+
+                if is_active:
+                    active_index = i
+
+                # Agregar pestaña nueva
+                if url:
+                    self.add_new_tab(url, title)
+
+            # Cerrar las pestañas viejas (las primeras N)
+            # Ahora las nuevas están al final, las viejas al principio
+            # Cerrar desde el final de las viejas para no afectar índices
+            for i in range(old_tabs_count - 1, -1, -1):
+                if i < self.tab_widget.count() and i < len(self.tabs):
+                    # Remover del widget
+                    self.tab_widget.removeTab(i)
+                    # Eliminar la referencia del browser
+                    old_browser = self.tabs.pop(i)
+                    old_browser.deleteLater()
+                    logger.debug(f"Pestaña vieja {i} cerrada")
+
+            # Activar la pestaña que estaba activa en la sesión
+            if len(self.tabs) > 0 and active_index < len(self.tabs):
+                self.tab_widget.setCurrentIndex(active_index)
+
+            logger.info(f"Sesión restaurada con {len(tabs_data)} pestañas")
+
+        except Exception as e:
+            logger.error(f"Error al restaurar pestañas de sesión: {e}")
+
+    def _restore_last_session(self):
+        """Restaura la última sesión guardada automáticamente."""
+        if not self.session_manager:
+            return
+
+        try:
+            tabs_data = self.session_manager.restore_last_session()
+
+            if tabs_data:
+                logger.info("Restaurando última sesión...")
+                self._restore_session_tabs(tabs_data)
+            else:
+                # No hay sesión anterior, cargar URL inicial
+                logger.debug("No hay sesión anterior, cargando URL inicial")
+                QTimer.singleShot(100, lambda: self.load_url(self.url))
+
+        except Exception as e:
+            logger.error(f"Error al restaurar última sesión: {e}")
+            # En caso de error, cargar URL inicial
+            QTimer.singleShot(100, lambda: self.load_url(self.url))
+
     # ==================== Eventos ====================
 
     def closeEvent(self, event):
         """Handler al cerrar la ventana."""
         logger.info("Cerrando SimpleBrowserWindow")
+
+        # Auto-guardar sesión actual antes de cerrar
+        if self.session_manager and len(self.tabs) > 0:
+            try:
+                tabs_data = self._get_current_tabs_data()
+                self.session_manager.auto_save_on_close(tabs_data)
+                logger.info("Sesión auto-guardada antes de cerrar")
+            except Exception as e:
+                logger.error(f"Error al auto-guardar sesión: {e}")
 
         # Desregistrar AppBar antes de cerrar
         self.unregister_appbar()
