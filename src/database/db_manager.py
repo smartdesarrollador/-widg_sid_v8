@@ -199,6 +199,19 @@ class DBManager:
                 order_index INTEGER DEFAULT 0
             );
 
+            -- Tabla de Speed Dial (accesos rápidos)
+            CREATE TABLE IF NOT EXISTS speed_dials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                url TEXT NOT NULL,
+                thumbnail_path TEXT DEFAULT NULL,
+                background_color TEXT DEFAULT '#16213e',
+                icon TEXT DEFAULT '🌐',
+                position INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             -- Índices para optimización
             CREATE INDEX IF NOT EXISTS idx_categories_order ON categories(order_index);
             CREATE INDEX IF NOT EXISTS idx_items_category ON items(category_id);
@@ -209,6 +222,7 @@ class DBManager:
             CREATE INDEX IF NOT EXISTS idx_pinned_active ON pinned_panels(is_active);
             CREATE INDEX IF NOT EXISTS idx_bookmarks_order ON bookmarks(order_index);
             CREATE INDEX IF NOT EXISTS idx_bookmarks_url ON bookmarks(url);
+            CREATE INDEX IF NOT EXISTS idx_speed_dials_position ON speed_dials(position);
             -- Índices para listas avanzadas
             CREATE INDEX IF NOT EXISTS idx_items_is_list ON items(is_list) WHERE is_list = 1;
             CREATE INDEX IF NOT EXISTS idx_items_list_group ON items(list_group) WHERE list_group IS NOT NULL;
@@ -1649,6 +1663,186 @@ class DBManager:
         except Exception as e:
             logger.error(f"Error al verificar marcador: {e}")
             return False
+
+    # ==================== Speed Dial Management ====================
+
+    def add_speed_dial(self, title: str, url: str, icon: str = '🌐',
+                      background_color: str = '#16213e', thumbnail_path: str = None) -> Optional[int]:
+        """
+        Agrega un acceso rápido (speed dial) a la base de datos.
+
+        Args:
+            title: Título del sitio
+            url: URL completa
+            icon: Emoji o icono (default: 🌐)
+            background_color: Color de fondo del tile (default: #16213e)
+            thumbnail_path: Ruta a thumbnail/screenshot (opcional)
+
+        Returns:
+            int: ID del speed dial creado, o None si falla
+        """
+        try:
+            # Obtener la siguiente posición
+            max_pos_query = "SELECT COALESCE(MAX(position), -1) + 1 as next_pos FROM speed_dials"
+            result = self.execute_query(max_pos_query)
+            next_position = result[0]['next_pos'] if result else 0
+
+            # Insertar speed dial
+            insert_query = """
+                INSERT INTO speed_dials (title, url, icon, background_color, thumbnail_path, position)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """
+            self.execute_update(insert_query, (title, url, icon, background_color, thumbnail_path, next_position))
+
+            # Obtener el ID insertado
+            last_id_query = "SELECT last_insert_rowid() as id"
+            result = self.execute_query(last_id_query)
+            speed_dial_id = result[0]['id'] if result else None
+
+            logger.info(f"Speed dial agregado: '{title}' - {url}")
+            return speed_dial_id
+
+        except Exception as e:
+            logger.error(f"Error al agregar speed dial: {e}")
+            return None
+
+    def get_speed_dials(self) -> List[Dict]:
+        """
+        Obtiene todos los accesos rápidos ordenados por posición.
+
+        Returns:
+            List[Dict]: Lista de speed dials
+        """
+        try:
+            query = """
+                SELECT id, title, url, icon, background_color, thumbnail_path, position, created_at
+                FROM speed_dials
+                ORDER BY position ASC
+            """
+            result = self.execute_query(query)
+            return result if result else []
+
+        except Exception as e:
+            logger.error(f"Error al obtener speed dials: {e}")
+            return []
+
+    def update_speed_dial(self, speed_dial_id: int, title: str = None, url: str = None,
+                         icon: str = None, background_color: str = None,
+                         thumbnail_path: str = None) -> bool:
+        """
+        Actualiza un speed dial existente.
+
+        Args:
+            speed_dial_id: ID del speed dial
+            title: Nuevo título (opcional)
+            url: Nueva URL (opcional)
+            icon: Nuevo icono (opcional)
+            background_color: Nuevo color de fondo (opcional)
+            thumbnail_path: Nueva ruta de thumbnail (opcional)
+
+        Returns:
+            bool: True si se actualizó correctamente
+        """
+        try:
+            # Construir query dinámicamente solo con campos no-None
+            updates = []
+            params = []
+
+            if title is not None:
+                updates.append("title = ?")
+                params.append(title)
+
+            if url is not None:
+                updates.append("url = ?")
+                params.append(url)
+
+            if icon is not None:
+                updates.append("icon = ?")
+                params.append(icon)
+
+            if background_color is not None:
+                updates.append("background_color = ?")
+                params.append(background_color)
+
+            if thumbnail_path is not None:
+                updates.append("thumbnail_path = ?")
+                params.append(thumbnail_path)
+
+            if not updates:
+                logger.warning("No se especificaron campos para actualizar")
+                return False
+
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(speed_dial_id)
+
+            update_query = f"UPDATE speed_dials SET {', '.join(updates)} WHERE id = ?"
+            self.execute_update(update_query, tuple(params))
+            logger.info(f"Speed dial actualizado: ID {speed_dial_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error al actualizar speed dial: {e}")
+            return False
+
+    def delete_speed_dial(self, speed_dial_id: int) -> bool:
+        """
+        Elimina un speed dial por su ID.
+
+        Args:
+            speed_dial_id: ID del speed dial
+
+        Returns:
+            bool: True si se eliminó correctamente
+        """
+        try:
+            delete_query = "DELETE FROM speed_dials WHERE id = ?"
+            self.execute_update(delete_query, (speed_dial_id,))
+            logger.info(f"Speed dial eliminado: ID {speed_dial_id}")
+
+            # Reorganizar posiciones
+            self._reorder_speed_dials()
+            return True
+
+        except Exception as e:
+            logger.error(f"Error al eliminar speed dial: {e}")
+            return False
+
+    def reorder_speed_dial(self, speed_dial_id: int, new_position: int) -> bool:
+        """
+        Cambia la posición de un speed dial.
+
+        Args:
+            speed_dial_id: ID del speed dial
+            new_position: Nueva posición (0-based)
+
+        Returns:
+            bool: True si se reordenó correctamente
+        """
+        try:
+            update_query = "UPDATE speed_dials SET position = ? WHERE id = ?"
+            self.execute_update(update_query, (new_position, speed_dial_id))
+            self._reorder_speed_dials()
+            logger.info(f"Speed dial reordenado: ID {speed_dial_id} -> posición {new_position}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error al reordenar speed dial: {e}")
+            return False
+
+    def _reorder_speed_dials(self):
+        """Reorganiza las posiciones de speed dials para que sean consecutivas (0, 1, 2, ...)."""
+        try:
+            # Obtener todos los speed dials ordenados por posición actual
+            speed_dials = self.get_speed_dials()
+
+            # Actualizar posiciones para que sean consecutivas
+            for index, sd in enumerate(speed_dials):
+                if sd['position'] != index:
+                    update_query = "UPDATE speed_dials SET position = ? WHERE id = ?"
+                    self.execute_update(update_query, (index, sd['id']))
+
+        except Exception as e:
+            logger.error(f"Error al reorganizar speed dials: {e}")
 
     # ==================== Context Manager ====================
 

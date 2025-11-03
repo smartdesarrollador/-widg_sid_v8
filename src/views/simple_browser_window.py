@@ -8,13 +8,14 @@ import sys
 import logging
 import ctypes
 from ctypes import wintypes
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
     QPushButton, QLabel, QApplication, QTabWidget, QTabBar
 )
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal, QTimer
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWebEngineCore import QWebEngineSettings
+from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEngineProfile
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,13 @@ class SimpleBrowserWindow(QWidget):
         self.forward_btn.setToolTip("Adelante")
         self.forward_btn.clicked.connect(self.go_forward)
         nav_layout.addWidget(self.forward_btn)
+
+        # Botón home
+        self.home_btn = QPushButton("⌂")
+        self.home_btn.setFixedWidth(40)
+        self.home_btn.setToolTip("Inicio (Speed Dial)")
+        self.home_btn.clicked.connect(self.go_home)
+        nav_layout.addWidget(self.home_btn)
 
         # Label de estado
         self.status_label = QLabel("●")
@@ -378,9 +386,12 @@ class SimpleBrowserWindow(QWidget):
         # Activar la nueva pestaña
         self.tab_widget.setCurrentIndex(tab_index)
 
-        # Cargar URL
-        if url:
+        # Cargar URL o Speed Dial
+        if url and url != "https://www.google.com":
             browser.setUrl(QUrl(url if url.startswith(('http://', 'https://')) else 'https://' + url))
+        else:
+            # Cargar Speed Dial por defecto en nuevas pestañas
+            QTimer.singleShot(100, lambda: self._load_speed_dial_in_browser(browser))
 
         logger.info(f"Nueva pestaña agregada: {title} ({url})")
 
@@ -477,6 +488,80 @@ class SimpleBrowserWindow(QWidget):
             browser.forward()
         else:
             logger.debug("No se puede navegar hacia adelante")
+
+    def go_home(self):
+        """Navega a la página de inicio (Speed Dial)."""
+        logger.info("Navegando a Speed Dial (Home)")
+        self.load_speed_dial()
+
+    def load_speed_dial(self):
+        """Carga la página Speed Dial en la pestaña activa."""
+        if not self.db:
+            logger.warning("No hay DBManager disponible para Speed Dial")
+            return
+
+        try:
+            # Importar el generador de Speed Dial
+            from src.core.speed_dial_generator import SpeedDialGenerator
+
+            # Generar HTML del Speed Dial
+            generator = SpeedDialGenerator(self.db)
+            html_content = generator.generate_html()
+
+            # Cargar el HTML en la pestaña activa
+            browser = self.get_current_browser()
+            if browser:
+                browser.setHtml(html_content)
+                self.url_bar.setText("speed-dial://home")
+                logger.info("Speed Dial cargado")
+
+        except Exception as e:
+            logger.error(f"Error al cargar Speed Dial: {e}")
+
+    def _load_speed_dial_in_browser(self, browser: QWebEngineView):
+        """
+        Carga Speed Dial en un browser específico (helper para nuevas pestañas).
+
+        Args:
+            browser: Instancia de QWebEngineView donde cargar el Speed Dial
+        """
+        if not self.db:
+            return
+
+        try:
+            from src.core.speed_dial_generator import SpeedDialGenerator
+
+            generator = SpeedDialGenerator(self.db)
+            html_content = generator.generate_html()
+            browser.setHtml(html_content)
+            logger.debug("Speed Dial cargado en nueva pestaña")
+
+        except Exception as e:
+            logger.error(f"Error al cargar Speed Dial en nueva pestaña: {e}")
+
+    def open_speed_dial_dialog(self):
+        """Abre el dialog para agregar un nuevo speed dial."""
+        if not self.db:
+            logger.warning("No hay DBManager disponible")
+            return
+
+        try:
+            from src.views.speed_dial_dialog import SpeedDialDialog
+
+            dialog = SpeedDialDialog(self.db, parent=self)
+            dialog.speed_dial_added.connect(self._on_speed_dial_added)
+
+            if dialog.exec():
+                logger.info("Dialog de speed dial cerrado con éxito")
+
+        except Exception as e:
+            logger.error(f"Error al abrir dialog de speed dial: {e}")
+
+    def _on_speed_dial_added(self, speed_dial_data: dict):
+        """Handler cuando se agrega un nuevo speed dial."""
+        logger.info(f"Nuevo speed dial agregado: {speed_dial_data['title']}")
+        # Recargar la página de Speed Dial para mostrar el nuevo
+        self.load_speed_dial()
 
     def toggle_bookmark(self):
         """Agrega o quita la página actual de marcadores."""
@@ -596,7 +681,14 @@ class SimpleBrowserWindow(QWidget):
         """
         Handler cuando cambia el título de una página.
         Actualiza el título de la pestaña correspondiente.
+        También detecta señales especiales para Speed Dial.
         """
+        # Detectar señal especial para agregar Speed Dial
+        if title == '__SPEED_DIAL_ADD_NEW__':
+            logger.debug("Señal detectada para agregar nuevo Speed Dial")
+            QTimer.singleShot(50, self.open_speed_dial_dialog)
+            return
+
         # Encontrar qué pestaña emitió la señal
         sender_browser = self.sender()
         if sender_browser in self.tabs:
