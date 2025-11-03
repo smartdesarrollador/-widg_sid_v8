@@ -188,6 +188,17 @@ class DBManager:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- Tabla de marcadores del navegador
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                url TEXT NOT NULL,
+                folder TEXT DEFAULT NULL,
+                icon TEXT DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                order_index INTEGER DEFAULT 0
+            );
+
             -- Índices para optimización
             CREATE INDEX IF NOT EXISTS idx_categories_order ON categories(order_index);
             CREATE INDEX IF NOT EXISTS idx_items_category ON items(category_id);
@@ -196,6 +207,8 @@ class DBManager:
             CREATE INDEX IF NOT EXISTS idx_pinned_category ON pinned_panels(category_id);
             CREATE INDEX IF NOT EXISTS idx_pinned_last_opened ON pinned_panels(last_opened DESC);
             CREATE INDEX IF NOT EXISTS idx_pinned_active ON pinned_panels(is_active);
+            CREATE INDEX IF NOT EXISTS idx_bookmarks_order ON bookmarks(order_index);
+            CREATE INDEX IF NOT EXISTS idx_bookmarks_url ON bookmarks(url);
             -- Índices para listas avanzadas
             CREATE INDEX IF NOT EXISTS idx_items_is_list ON items(is_list) WHERE is_list = 1;
             CREATE INDEX IF NOT EXISTS idx_items_list_group ON items(list_group) WHERE list_group IS NOT NULL;
@@ -1471,6 +1484,173 @@ class DBManager:
         except Exception as e:
             logger.error(f"Error saving browser config: {e}")
             return False
+
+    # ==================== Bookmarks Management ====================
+
+    def add_bookmark(self, title: str, url: str, folder: str = None) -> Optional[int]:
+        """
+        Agrega un marcador a la base de datos.
+
+        Args:
+            title: Título de la página
+            url: URL completa
+            folder: Carpeta/grupo opcional
+
+        Returns:
+            int: ID del marcador creado, o None si falla
+        """
+        try:
+            # Verificar si el marcador ya existe
+            check_query = "SELECT id FROM bookmarks WHERE url = ?"
+            existing = self.execute_query(check_query, (url,))
+
+            if existing:
+                logger.warning(f"Marcador ya existe para URL: {url}")
+                return existing[0]['id']
+
+            # Obtener el siguiente order_index
+            max_order_query = "SELECT COALESCE(MAX(order_index), -1) + 1 as next_order FROM bookmarks"
+            result = self.execute_query(max_order_query)
+            next_order = result[0]['next_order'] if result else 0
+
+            # Insertar marcador
+            insert_query = """
+                INSERT INTO bookmarks (title, url, folder, order_index)
+                VALUES (?, ?, ?, ?)
+            """
+            self.execute_update(insert_query, (title, url, folder, next_order))
+
+            # Obtener el ID insertado
+            last_id_query = "SELECT last_insert_rowid() as id"
+            result = self.execute_query(last_id_query)
+            bookmark_id = result[0]['id'] if result else None
+
+            logger.info(f"Marcador agregado: '{title}' - {url}")
+            return bookmark_id
+
+        except Exception as e:
+            logger.error(f"Error al agregar marcador: {e}")
+            return None
+
+    def get_bookmarks(self, folder: str = None) -> List[Dict]:
+        """
+        Obtiene todos los marcadores, opcionalmente filtrados por carpeta.
+
+        Args:
+            folder: Carpeta para filtrar (None = todos)
+
+        Returns:
+            List[Dict]: Lista de marcadores
+        """
+        try:
+            if folder is not None:
+                query = """
+                    SELECT id, title, url, folder, icon, created_at, order_index
+                    FROM bookmarks
+                    WHERE folder = ?
+                    ORDER BY order_index ASC, created_at DESC
+                """
+                result = self.execute_query(query, (folder,))
+            else:
+                query = """
+                    SELECT id, title, url, folder, icon, created_at, order_index
+                    FROM bookmarks
+                    ORDER BY order_index ASC, created_at DESC
+                """
+                result = self.execute_query(query)
+
+            return result if result else []
+
+        except Exception as e:
+            logger.error(f"Error al obtener marcadores: {e}")
+            return []
+
+    def delete_bookmark(self, bookmark_id: int) -> bool:
+        """
+        Elimina un marcador por su ID.
+
+        Args:
+            bookmark_id: ID del marcador
+
+        Returns:
+            bool: True si se eliminó correctamente
+        """
+        try:
+            delete_query = "DELETE FROM bookmarks WHERE id = ?"
+            self.execute_update(delete_query, (bookmark_id,))
+            logger.info(f"Marcador eliminado: ID {bookmark_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error al eliminar marcador: {e}")
+            return False
+
+    def update_bookmark(self, bookmark_id: int, title: str = None, url: str = None,
+                       folder: str = None) -> bool:
+        """
+        Actualiza un marcador existente.
+
+        Args:
+            bookmark_id: ID del marcador
+            title: Nuevo título (opcional)
+            url: Nueva URL (opcional)
+            folder: Nueva carpeta (opcional)
+
+        Returns:
+            bool: True si se actualizó correctamente
+        """
+        try:
+            # Construir query dinámicamente solo con campos no-None
+            updates = []
+            params = []
+
+            if title is not None:
+                updates.append("title = ?")
+                params.append(title)
+
+            if url is not None:
+                updates.append("url = ?")
+                params.append(url)
+
+            if folder is not None:
+                updates.append("folder = ?")
+                params.append(folder)
+
+            if not updates:
+                logger.warning("No se especificaron campos para actualizar")
+                return False
+
+            params.append(bookmark_id)
+            update_query = f"UPDATE bookmarks SET {', '.join(updates)} WHERE id = ?"
+
+            self.execute_update(update_query, tuple(params))
+            logger.info(f"Marcador actualizado: ID {bookmark_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error al actualizar marcador: {e}")
+            return False
+
+    def is_bookmark_exists(self, url: str) -> bool:
+        """
+        Verifica si ya existe un marcador con la URL dada.
+
+        Args:
+            url: URL a verificar
+
+        Returns:
+            bool: True si el marcador existe
+        """
+        try:
+            query = "SELECT id FROM bookmarks WHERE url = ?"
+            result = self.execute_query(query, (url,))
+            return len(result) > 0 if result else False
+
+        except Exception as e:
+            logger.error(f"Error al verificar marcador: {e}")
+            return False
+
+    # ==================== Context Manager ====================
 
     def __enter__(self):
         """Context manager entry"""

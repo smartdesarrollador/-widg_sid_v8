@@ -55,15 +55,17 @@ class SimpleBrowserWindow(QWidget):
     # Señales
     closed = pyqtSignal()
 
-    def __init__(self, url: str = "https://www.google.com"):
+    def __init__(self, url: str = "https://www.google.com", db_manager=None):
         """
         Inicializa la ventana del navegador.
 
         Args:
             url: URL inicial a cargar
+            db_manager: Instancia de DBManager para manejar marcadores
         """
         super().__init__()
         self.url = url
+        self.db = db_manager
         self.appbar_registered = False  # Estado del AppBar
 
         # Variables para redimensionamiento
@@ -182,6 +184,20 @@ class SimpleBrowserWindow(QWidget):
         self.reload_btn.setToolTip("Recargar página")
         self.reload_btn.clicked.connect(self.reload_page)
         nav_layout.addWidget(self.reload_btn)
+
+        # Botón marcador (estrella)
+        self.bookmark_btn = QPushButton("☆")
+        self.bookmark_btn.setFixedWidth(40)
+        self.bookmark_btn.setToolTip("Agregar a marcadores")
+        self.bookmark_btn.clicked.connect(self.toggle_bookmark)
+        nav_layout.addWidget(self.bookmark_btn)
+
+        # Botón ver marcadores
+        self.bookmarks_list_btn = QPushButton("≡")
+        self.bookmarks_list_btn.setFixedWidth(40)
+        self.bookmarks_list_btn.setToolTip("Ver marcadores")
+        self.bookmarks_list_btn.clicked.connect(self.show_bookmarks_panel)
+        nav_layout.addWidget(self.bookmarks_list_btn)
 
         # Botón cerrar
         self.close_btn = QPushButton("✕")
@@ -462,6 +478,79 @@ class SimpleBrowserWindow(QWidget):
         else:
             logger.debug("No se puede navegar hacia adelante")
 
+    def toggle_bookmark(self):
+        """Agrega o quita la página actual de marcadores."""
+        if not self.db:
+            logger.warning("No hay DBManager disponible para marcadores")
+            return
+
+        browser = self.get_current_browser()
+        if not browser:
+            return
+
+        current_url = browser.url().toString()
+        current_title = browser.title() or "Nueva pestaña"
+
+        # Verificar si ya existe el marcador
+        if self.db.is_bookmark_exists(current_url):
+            # Eliminar marcador
+            bookmarks = self.db.get_bookmarks()
+            for bookmark in bookmarks:
+                if bookmark['url'] == current_url:
+                    self.db.delete_bookmark(bookmark['id'])
+                    logger.info(f"Marcador eliminado: {current_title}")
+                    self.update_bookmark_button()
+                    return
+        else:
+            # Agregar marcador
+            bookmark_id = self.db.add_bookmark(current_title, current_url)
+            if bookmark_id:
+                logger.info(f"Marcador agregado: {current_title}")
+                self.update_bookmark_button()
+
+    def update_bookmark_button(self):
+        """Actualiza el icono del botón de marcador según si la página actual está guardada."""
+        if not self.db:
+            return
+
+        browser = self.get_current_browser()
+        if not browser:
+            return
+
+        current_url = browser.url().toString()
+
+        if self.db.is_bookmark_exists(current_url):
+            self.bookmark_btn.setText("★")
+            self.bookmark_btn.setToolTip("Quitar de marcadores")
+        else:
+            self.bookmark_btn.setText("☆")
+            self.bookmark_btn.setToolTip("Agregar a marcadores")
+
+    def show_bookmarks_panel(self):
+        """Muestra el panel flotante con la lista de marcadores."""
+        if not self.db:
+            logger.warning("No hay DBManager disponible para marcadores")
+            return
+
+        # Importar aquí para evitar importación circular
+        from src.views.bookmarks_panel import BookmarksPanel
+
+        # Crear panel si no existe
+        if not hasattr(self, 'bookmarks_panel') or self.bookmarks_panel is None:
+            self.bookmarks_panel = BookmarksPanel(self.db, self)
+            self.bookmarks_panel.bookmark_selected.connect(self._on_bookmark_selected)
+
+        # Mostrar y posicionar el panel
+        self.bookmarks_panel.refresh_bookmarks()
+        self.bookmarks_panel.show()
+        self.bookmarks_panel.raise_()
+        self.bookmarks_panel.activateWindow()
+
+    def _on_bookmark_selected(self, url: str):
+        """Handler cuando se selecciona un marcador del panel."""
+        logger.info(f"Navegando a marcador: {url}")
+        self.load_url(url)
+
     # ==================== Slots ====================
 
     def _on_url_entered(self):
@@ -500,6 +589,7 @@ class SimpleBrowserWindow(QWidget):
     def _on_url_changed(self, url: QUrl):
         """Handler cuando cambia la URL."""
         self.url_bar.setText(url.toString())
+        self.update_bookmark_button()  # Actualizar estado del botón de marcador
         logger.debug(f"URL cambiada a: {url.toString()}")
 
     def _on_title_changed(self, title: str):

@@ -70,8 +70,8 @@ class SimpleBrowserManager:
             width = config.get('width', 500)
             height = config.get('height', 700)
 
-            # Crear ventana
-            self.browser_window = SimpleBrowserWindow(home_url)
+            # Crear ventana pasando el DBManager para los marcadores
+            self.browser_window = SimpleBrowserWindow(home_url, db_manager=self.db)
 
             # Aplicar tamaño configurado
             self.browser_window.resize(width, height)
