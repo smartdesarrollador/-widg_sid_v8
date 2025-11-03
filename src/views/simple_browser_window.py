@@ -67,6 +67,13 @@ class SimpleBrowserWindow(QWidget):
         self.is_loading = False
         self.appbar_registered = False  # Estado del AppBar
 
+        # Variables para redimensionamiento
+        self.resizing = False
+        self.resize_edge_width = 10  # Ancho del área sensible en el borde izquierdo
+        self.resize_start_pos = None
+        self.resize_start_width = None
+        self.resize_start_x = None
+
         logger.info(f"Inicializando SimpleBrowserWindow con URL: {url}")
 
         self._setup_window()
@@ -74,6 +81,9 @@ class SimpleBrowserWindow(QWidget):
         self._configure_webengine()
         self._setup_timer()
         self._apply_styles()
+
+        # Habilitar rastreo de mouse para detectar hover en el borde
+        self.setMouseTracking(True)
 
         # Cargar URL inicial de forma asíncrona (evita bloqueo del hilo principal)
         QTimer.singleShot(100, lambda: self.load_url(self.url))
@@ -89,13 +99,13 @@ class SimpleBrowserWindow(QWidget):
 
         self.setWindowTitle("Widget Sidebar Browser")
 
-        # Calcular tamaño para ocupar toda la altura de la pantalla
+        # Calcular tamaño para ocupar toda la altura de la pantalla (excepto taskbar)
         screen = QApplication.primaryScreen()
         screen_geometry = screen.availableGeometry()
 
-        # Altura: 80% de la pantalla (igual que el sidebar)
-        window_height = int(screen_geometry.height() * 0.8)
-        window_width = 500  # Ancho configurable
+        # Altura: 100% del área disponible (excluye automáticamente la barra de tareas)
+        window_height = screen_geometry.height()
+        window_width = 500  # Ancho inicial (redimensionable)
 
         self.resize(window_width, window_height)
 
@@ -316,21 +326,95 @@ class SimpleBrowserWindow(QWidget):
     def position_near_sidebar(self, sidebar_window):
         """
         Posiciona la ventana del navegador al lado del sidebar.
+        Ocupa toda la altura disponible de la pantalla.
 
         Args:
             sidebar_window: Referencia a la ventana del sidebar (MainWindow)
         """
         # Obtener geometría del sidebar
         sidebar_x = sidebar_window.x()
-        sidebar_y = sidebar_window.y()
-        sidebar_width = sidebar_window.width()
+
+        # Obtener área disponible de la pantalla (excluye taskbar)
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.availableGeometry()
 
         # Posicionar a la izquierda del sidebar con un gap de 10px
         panel_x = sidebar_x - self.width() - 10  # 10px gap
-        panel_y = sidebar_y
+        panel_y = screen_geometry.y()  # Inicio del área disponible (normalmente 0)
 
-        self.move(panel_x, panel_y)
-        logger.debug(f"Navegador posicionado en ({panel_x}, {panel_y})")
+        # Ajustar altura para que ocupe todo el espacio disponible
+        panel_height = screen_geometry.height()
+
+        # Aplicar posición y tamaño
+        self.setGeometry(int(panel_x), panel_y, self.width(), panel_height)
+        logger.debug(f"Navegador posicionado en ({panel_x}, {panel_y}) con altura {panel_height}px")
+
+    # ==================== Redimensionamiento ====================
+
+    def is_on_left_edge(self, pos):
+        """
+        Verifica si el mouse está en el borde izquierdo para redimensionar.
+
+        Args:
+            pos: Posición del mouse (QPoint)
+
+        Returns:
+            bool: True si está en el borde izquierdo
+        """
+        return pos.x() <= self.resize_edge_width
+
+    def mouseMoveEvent(self, event):
+        """Maneja el movimiento del mouse para redimensionamiento."""
+        pos = event.pos()
+
+        if self.resizing:
+            # Redimensionar mientras se arrastra
+            delta_x = event.globalPosition().x() - self.resize_start_pos.x()
+            new_width = max(300, self.resize_start_width - int(delta_x))  # Mínimo 300px
+            new_x = self.resize_start_x + (self.resize_start_width - new_width)
+
+            # Aplicar nuevo tamaño y posición
+            self.setGeometry(int(new_x), self.y(), new_width, self.height())
+            event.accept()
+        elif self.is_on_left_edge(pos):
+            # Cambiar cursor a resize horizontal
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        else:
+            # Restaurar cursor normal
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
+        event.accept()
+
+    def mousePressEvent(self, event):
+        """Inicia el redimensionamiento al hacer click en el borde."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.pos()
+            if self.is_on_left_edge(pos):
+                # Iniciar redimensionamiento
+                self.resizing = True
+                self.resize_start_pos = event.globalPosition()
+                self.resize_start_width = self.width()
+                self.resize_start_x = self.x()
+                event.accept()
+                return
+
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Finaliza el redimensionamiento."""
+        if event.button() == Qt.MouseButton.LeftButton and self.resizing:
+            self.resizing = False
+
+            # Actualizar AppBar con el nuevo tamaño
+            if self.appbar_registered:
+                self.unregister_appbar()
+                self.register_appbar()
+                logger.info(f"AppBar actualizado - nuevo ancho: {self.width()}px")
+
+            event.accept()
+            return
+
+        super().mouseReleaseEvent(event)
 
     # ==================== AppBar Management ====================
 
