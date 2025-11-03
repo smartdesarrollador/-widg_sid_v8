@@ -134,9 +134,13 @@ class SimpleBrowserWindow(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Barra de navegación
+        # Barra de navegación principal
         nav_bar = self._create_nav_bar()
         main_layout.addLayout(nav_bar)
+
+        # Barra de herramientas secundaria (marcadores, sesiones, etc)
+        tools_bar = self._create_tools_bar()
+        main_layout.addLayout(tools_bar)
 
         # QTabWidget para pestañas
         self.tab_widget = QTabWidget()
@@ -159,7 +163,7 @@ class SimpleBrowserWindow(QWidget):
         self.add_new_tab(self.url, "Nueva pestaña")
 
     def _create_nav_bar(self) -> QHBoxLayout:
-        """Crea la barra de navegación."""
+        """Crea la barra de navegación principal."""
         nav_layout = QHBoxLayout()
         nav_layout.setContentsMargins(5, 5, 5, 5)
         nav_layout.setSpacing(5)
@@ -205,41 +209,6 @@ class SimpleBrowserWindow(QWidget):
         self.reload_btn.clicked.connect(self.reload_page)
         nav_layout.addWidget(self.reload_btn)
 
-        # Botón marcador (estrella)
-        self.bookmark_btn = QPushButton("☆")
-        self.bookmark_btn.setFixedWidth(40)
-        self.bookmark_btn.setToolTip("Agregar a marcadores")
-        self.bookmark_btn.clicked.connect(self.toggle_bookmark)
-        nav_layout.addWidget(self.bookmark_btn)
-
-        # Botón ver marcadores
-        self.bookmarks_list_btn = QPushButton("≡")
-        self.bookmarks_list_btn.setFixedWidth(40)
-        self.bookmarks_list_btn.setToolTip("Ver marcadores")
-        self.bookmarks_list_btn.clicked.connect(self.show_bookmarks_panel)
-        nav_layout.addWidget(self.bookmarks_list_btn)
-
-        # Separador
-        separator = QLabel("|")
-        separator.setStyleSheet("color: #00d4ff;")
-        separator.setFixedWidth(15)
-        separator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        nav_layout.addWidget(separator)
-
-        # Botón guardar sesión
-        self.save_session_btn = QPushButton("💾")
-        self.save_session_btn.setFixedWidth(40)
-        self.save_session_btn.setToolTip("Guardar sesión actual")
-        self.save_session_btn.clicked.connect(self.save_current_session)
-        nav_layout.addWidget(self.save_session_btn)
-
-        # Botón gestionar sesiones
-        self.manage_sessions_btn = QPushButton("🗂️")
-        self.manage_sessions_btn.setFixedWidth(40)
-        self.manage_sessions_btn.setToolTip("Gestionar sesiones")
-        self.manage_sessions_btn.clicked.connect(self.show_session_manager)
-        nav_layout.addWidget(self.manage_sessions_btn)
-
         # Botón cerrar
         self.close_btn = QPushButton("✕")
         self.close_btn.setFixedWidth(40)
@@ -248,6 +217,66 @@ class SimpleBrowserWindow(QWidget):
         nav_layout.addWidget(self.close_btn)
 
         return nav_layout
+
+    def _create_tools_bar(self) -> QHBoxLayout:
+        """Crea la barra de herramientas secundaria (marcadores, sesiones, etc)."""
+        tools_layout = QHBoxLayout()
+        tools_layout.setContentsMargins(5, 0, 5, 5)
+        tools_layout.setSpacing(5)
+
+        # Sección: Marcadores
+        bookmarks_label = QLabel("Marcadores:")
+        bookmarks_label.setStyleSheet("color: #00d4ff; font-weight: bold; font-size: 11px;")
+        tools_layout.addWidget(bookmarks_label)
+
+        # Botón marcador (estrella)
+        self.bookmark_btn = QPushButton("☆")
+        self.bookmark_btn.setFixedWidth(35)
+        self.bookmark_btn.setFixedHeight(30)
+        self.bookmark_btn.setToolTip("Agregar a marcadores")
+        self.bookmark_btn.clicked.connect(self.toggle_bookmark)
+        tools_layout.addWidget(self.bookmark_btn)
+
+        # Botón ver marcadores
+        self.bookmarks_list_btn = QPushButton("≡")
+        self.bookmarks_list_btn.setFixedWidth(35)
+        self.bookmarks_list_btn.setFixedHeight(30)
+        self.bookmarks_list_btn.setToolTip("Ver marcadores")
+        self.bookmarks_list_btn.clicked.connect(self.show_bookmarks_panel)
+        tools_layout.addWidget(self.bookmarks_list_btn)
+
+        # Separador
+        separator1 = QLabel("|")
+        separator1.setStyleSheet("color: #0f3460;")
+        separator1.setFixedWidth(15)
+        separator1.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tools_layout.addWidget(separator1)
+
+        # Sección: Sesiones
+        sessions_label = QLabel("Sesiones:")
+        sessions_label.setStyleSheet("color: #00d4ff; font-weight: bold; font-size: 11px;")
+        tools_layout.addWidget(sessions_label)
+
+        # Botón guardar sesión
+        self.save_session_btn = QPushButton("💾")
+        self.save_session_btn.setFixedWidth(35)
+        self.save_session_btn.setFixedHeight(30)
+        self.save_session_btn.setToolTip("Guardar sesión actual")
+        self.save_session_btn.clicked.connect(self.save_current_session)
+        tools_layout.addWidget(self.save_session_btn)
+
+        # Botón gestionar sesiones
+        self.manage_sessions_btn = QPushButton("🗂️")
+        self.manage_sessions_btn.setFixedWidth(35)
+        self.manage_sessions_btn.setFixedHeight(30)
+        self.manage_sessions_btn.setToolTip("Gestionar sesiones")
+        self.manage_sessions_btn.clicked.connect(self.show_session_manager)
+        tools_layout.addWidget(self.manage_sessions_btn)
+
+        # Espacio flexible
+        tools_layout.addStretch()
+
+        return tools_layout
 
     def _setup_timer(self):
         """Configura timer de timeout para prevenir cuelgues."""
